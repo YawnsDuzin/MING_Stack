@@ -1,0 +1,17 @@
+# Grafana Dashboard Provisioning
+# 대시보드 자동 로드 설정
+
+apiVersion: 1
+
+providers:
+  - name: 'MING Stack Dashboards'
+    orgId: 1
+    folder: 'MING Stack'
+    folderUid: 'ming-stack'
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

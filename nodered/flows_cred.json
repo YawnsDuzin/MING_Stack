@@ -1,0 +1,9 @@
+{
+    "mqtt-broker-config": {
+        "user": "nodered",
+        "password": "mqtt_pass"
+    },
+    "influxdb-config": {
+        "token": "ming-super-secret-token"
+    }
+}

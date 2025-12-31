@@ -1,0 +1,33 @@
+# Environment files
+.env
+
+# Data directories
+mosquitto/data/
+mosquitto/log/
+influxdb/data/
+nodered/data/
+grafana/data/
+
+# Backup files
+backups/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Node
+node_modules/

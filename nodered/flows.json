@@ -1,0 +1,867 @@
+[
+    {
+        "id": "ming-flow-tab-main",
+        "type": "tab",
+        "label": "MING Stack - Main",
+        "disabled": false,
+        "info": "MING Stack 메인 플로우\n\n산업용 IoT 데이터 수집 및 처리"
+    },
+    {
+        "id": "comment-header",
+        "type": "comment",
+        "z": "ming-flow-tab-main",
+        "name": "=== MING Stack - 산업용 IoT 데이터 수집 ===",
+        "info": "",
+        "x": 250,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "mqtt-broker-config",
+        "type": "mqtt-broker",
+        "name": "MING MQTT Broker",
+        "broker": "mosquitto",
+        "port": "1883",
+        "clientid": "nodered-client",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "birthTopic": "nodered/status",
+        "birthQos": "1",
+        "birthPayload": "online",
+        "birthMsg": {},
+        "closeTopic": "nodered/status",
+        "closeQos": "1",
+        "closePayload": "offline",
+        "closeMsg": {},
+        "willTopic": "nodered/status",
+        "willQos": "1",
+        "willPayload": "offline",
+        "willMsg": {},
+        "sessionExpiry": ""
+    },
+    {
+        "id": "influxdb-config",
+        "type": "influxdb",
+        "hostname": "influxdb",
+        "port": "8086",
+        "protocol": "http",
+        "database": "factory",
+        "name": "MING InfluxDB",
+        "usetls": false,
+        "tls": "",
+        "influxdbVersion": "2.0",
+        "url": "http://influxdb:8086",
+        "rejectUnauthorized": true
+    },
+    {
+        "id": "comment-mqtt-section",
+        "type": "comment",
+        "z": "ming-flow-tab-main",
+        "name": "--- MQTT 데이터 수집 ---",
+        "info": "",
+        "x": 150,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "mqtt-in-factory",
+        "type": "mqtt in",
+        "z": "ming-flow-tab-main",
+        "name": "Factory Data Subscribe",
+        "topic": "factory/+/+/data",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "mqtt-broker-config",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 160,
+        "y": 160,
+        "wires": [
+            ["parse-mqtt-topic", "debug-mqtt"]
+        ]
+    },
+    {
+        "id": "parse-mqtt-topic",
+        "type": "function",
+        "z": "ming-flow-tab-main",
+        "name": "Parse Topic & Transform",
+        "func": "// MQTT 토픽 파싱: factory/{line}/{device}/data\nconst parts = msg.topic.split('/');\n\nmsg.measurement = 'sensor_data';\nmsg.tags = {\n    line: parts[1] || 'unknown',\n    device: parts[2] || 'unknown'\n};\nmsg.fields = msg.payload;\nmsg.timestamp = new Date();\n\n// InfluxDB 형식으로 변환\nmsg.payload = [{\n    measurement: msg.measurement,\n    tags: msg.tags,\n    fields: msg.fields,\n    timestamp: msg.timestamp\n}];\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 420,
+        "y": 160,
+        "wires": [
+            ["influxdb-write", "check-threshold"]
+        ]
+    },
+    {
+        "id": "influxdb-write",
+        "type": "influxdb out",
+        "z": "ming-flow-tab-main",
+        "influxdb": "influxdb-config",
+        "name": "Write to InfluxDB",
+        "measurement": "",
+        "precision": "ms",
+        "retentionPolicy": "",
+        "database": "",
+        "precisionV18FluxV20": "ms",
+        "retentionPolicyV18Flux": "",
+        "org": "ming-org",
+        "bucket": "factory",
+        "x": 670,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "check-threshold",
+        "type": "function",
+        "z": "ming-flow-tab-main",
+        "name": "Check Threshold",
+        "func": "// 임계값 체크\nconst thresholds = {\n    temperature: { min: 10, max: 40 },\n    humidity: { min: 20, max: 80 },\n    pressure: { min: 0.8, max: 1.5 }\n};\n\nconst alerts = [];\nconst fields = msg.fields || {};\n\nfor (const [key, value] of Object.entries(fields)) {\n    if (thresholds[key]) {\n        const t = thresholds[key];\n        if (value < t.min || value > t.max) {\n            alerts.push({\n                field: key,\n                value: value,\n                threshold: t,\n                status: value < t.min ? 'LOW' : 'HIGH'\n            });\n        }\n    }\n}\n\nif (alerts.length > 0) {\n    msg.payload = {\n        type: 'threshold_alert',\n        location: msg.tags,\n        alerts: alerts,\n        timestamp: new Date().toISOString()\n    };\n    return msg;\n}\n\nreturn null;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 670,
+        "y": 220,
+        "wires": [
+            ["mqtt-alert-publish"]
+        ]
+    },
+    {
+        "id": "mqtt-alert-publish",
+        "type": "mqtt out",
+        "z": "ming-flow-tab-main",
+        "name": "Publish Alert",
+        "topic": "factory/alerts",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "application/json",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqtt-broker-config",
+        "x": 870,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "debug-mqtt",
+        "type": "debug",
+        "z": "ming-flow-tab-main",
+        "name": "Debug MQTT",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 390,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "ming-flow-tab-modbus",
+        "type": "tab",
+        "label": "Modbus TCP",
+        "disabled": false,
+        "info": "Modbus TCP 통신 예제"
+    },
+    {
+        "id": "comment-modbus",
+        "type": "comment",
+        "z": "ming-flow-tab-modbus",
+        "name": "=== Modbus TCP 데이터 수집 ===",
+        "info": "",
+        "x": 190,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "modbus-client-config",
+        "type": "modbus-client",
+        "name": "Modbus Simulator",
+        "clienttype": "tcp",
+        "bufferCommands": true,
+        "stateLogEnabled": false,
+        "queueLogEnabled": false,
+        "failureLogEnabled": true,
+        "tcpHost": "modbus-simulator",
+        "tcpPort": "5020",
+        "tcpType": "DEFAULT",
+        "serialPort": "/dev/ttyUSB0",
+        "serialType": "RTU-BUFFERD",
+        "serialBaudrate": "9600",
+        "serialDatabits": "8",
+        "serialStopbits": "1",
+        "serialParity": "none",
+        "serialConnectionDelay": "100",
+        "serialAsciiResponseStartDelimiter": "0x3A",
+        "unit_id": "1",
+        "commandDelay": "1",
+        "clientTimeout": "1000",
+        "reconnectOnTimeout": true,
+        "reconnectTimeout": "2000",
+        "parallelUnitIdsAllowed": true
+    },
+    {
+        "id": "inject-modbus-read",
+        "type": "inject",
+        "z": "ming-flow-tab-modbus",
+        "name": "Every 5 seconds",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "5",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "3",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 150,
+        "y": 120,
+        "wires": [
+            ["modbus-read-holding"]
+        ]
+    },
+    {
+        "id": "modbus-read-holding",
+        "type": "modbus-read",
+        "z": "ming-flow-tab-modbus",
+        "name": "Read Holding Registers",
+        "topic": "",
+        "showStatusActivities": true,
+        "logIOActivities": false,
+        "showErrors": true,
+        "showWarnings": true,
+        "unitid": "1",
+        "dataType": "HoldingRegister",
+        "adr": "0",
+        "quantity": "10",
+        "rate": "5",
+        "rateUnit": "s",
+        "delayOnStart": false,
+        "startDelayTime": "",
+        "server": "modbus-client-config",
+        "useIOFile": false,
+        "ioFile": "",
+        "useIOForPayload": false,
+        "emptyMsgOnFail": false,
+        "x": 380,
+        "y": 120,
+        "wires": [
+            ["modbus-transform"],
+            []
+        ]
+    },
+    {
+        "id": "modbus-transform",
+        "type": "function",
+        "z": "ming-flow-tab-modbus",
+        "name": "Transform Modbus Data",
+        "func": "// Modbus 레지스터 값을 실제 값으로 변환\nconst registers = msg.payload;\n\n// 예시: 레지스터 매핑\n// 0: 온도 (x0.1)\n// 1: 습도 (x0.1)\n// 2: 압력 (x0.01)\n// 3: 모터 속도 (RPM)\n// 4: 전류 (x0.01 A)\n// 5-9: 예비\n\nconst data = {\n    temperature: registers[0] / 10,\n    humidity: registers[1] / 10,\n    pressure: registers[2] / 100,\n    motor_speed: registers[3],\n    current: registers[4] / 100\n};\n\n// MQTT로 발행할 메시지 구성\nmsg.topic = 'factory/line1/modbus_device/data';\nmsg.payload = data;\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 620,
+        "y": 120,
+        "wires": [
+            ["mqtt-publish-modbus", "debug-modbus"]
+        ]
+    },
+    {
+        "id": "mqtt-publish-modbus",
+        "type": "mqtt out",
+        "z": "ming-flow-tab-modbus",
+        "name": "Publish to MQTT",
+        "topic": "",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "application/json",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqtt-broker-config",
+        "x": 870,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "debug-modbus",
+        "type": "debug",
+        "z": "ming-flow-tab-modbus",
+        "name": "Debug Modbus",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 860,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "comment-modbus-write",
+        "type": "comment",
+        "z": "ming-flow-tab-modbus",
+        "name": "--- Modbus 제어 (쓰기) ---",
+        "info": "",
+        "x": 160,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "mqtt-control-subscribe",
+        "type": "mqtt in",
+        "z": "ming-flow-tab-modbus",
+        "name": "Control Subscribe",
+        "topic": "factory/line1/modbus_device/control",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "mqtt-broker-config",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 320,
+        "wires": [
+            ["parse-control-command"]
+        ]
+    },
+    {
+        "id": "parse-control-command",
+        "type": "function",
+        "z": "ming-flow-tab-modbus",
+        "name": "Parse Control Command",
+        "func": "// 제어 명령 파싱\n// 예시 페이로드: {\"register\": 10, \"value\": 100}\n\nconst command = msg.payload;\n\nmsg.payload = {\n    value: command.value,\n    'fc': 6, // Write Single Register\n    'unitid': 1,\n    'address': command.register,\n    'quantity': 1\n};\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 380,
+        "y": 320,
+        "wires": [
+            ["modbus-write"]
+        ]
+    },
+    {
+        "id": "modbus-write",
+        "type": "modbus-write",
+        "z": "ming-flow-tab-modbus",
+        "name": "Write Register",
+        "showStatusActivities": true,
+        "showErrors": true,
+        "showWarnings": true,
+        "unitid": "1",
+        "dataType": "HoldingRegister",
+        "adr": "10",
+        "quantity": "1",
+        "server": "modbus-client-config",
+        "emptyMsgOnFail": false,
+        "keepMsgProperties": false,
+        "delayOnStart": false,
+        "startDelayTime": "",
+        "x": 600,
+        "y": 320,
+        "wires": [
+            ["modbus-write-result"],
+            []
+        ]
+    },
+    {
+        "id": "modbus-write-result",
+        "type": "function",
+        "z": "ming-flow-tab-modbus",
+        "name": "Write Result",
+        "func": "msg.topic = 'factory/line1/modbus_device/control/response';\nmsg.payload = {\n    success: true,\n    message: 'Register written successfully',\n    timestamp: new Date().toISOString()\n};\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 790,
+        "y": 320,
+        "wires": [
+            ["mqtt-control-response"]
+        ]
+    },
+    {
+        "id": "mqtt-control-response",
+        "type": "mqtt out",
+        "z": "ming-flow-tab-modbus",
+        "name": "Control Response",
+        "topic": "",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "application/json",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqtt-broker-config",
+        "x": 990,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "ming-flow-tab-opcua",
+        "type": "tab",
+        "label": "OPC-UA",
+        "disabled": false,
+        "info": "OPC-UA 통신 예제"
+    },
+    {
+        "id": "comment-opcua",
+        "type": "comment",
+        "z": "ming-flow-tab-opcua",
+        "name": "=== OPC-UA 데이터 수집 ===",
+        "info": "",
+        "x": 180,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "opcua-client-config",
+        "type": "OpcUa-Client",
+        "z": "",
+        "endpoint": "opc.tcp://opcua-simulator:4840",
+        "action": "read",
+        "deadbandtype": "a",
+        "deadbandvalue": 1,
+        "time": 10,
+        "timeUnit": "s",
+        "certificate": "n",
+        "localfile": "",
+        "localkeyfile": "",
+        "securitymode": "None",
+        "securitypolicy": "None",
+        "folderName4PKI": "",
+        "name": "OPC-UA Simulator"
+    },
+    {
+        "id": "inject-opcua-read",
+        "type": "inject",
+        "z": "ming-flow-tab-opcua",
+        "name": "Every 5 seconds",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "5",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "5",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 150,
+        "y": 120,
+        "wires": [
+            ["opcua-read-nodes"]
+        ]
+    },
+    {
+        "id": "opcua-read-nodes",
+        "type": "function",
+        "z": "ming-flow-tab-opcua",
+        "name": "Set Node IDs",
+        "func": "// 읽을 OPC-UA 노드 설정\nmsg.topic = 'readmultiple';\nmsg.nodesToRead = [\n    'ns=2;s=Temperature',\n    'ns=2;s=Humidity',\n    'ns=2;s=Pressure',\n    'ns=2;s=MotorSpeed',\n    'ns=2;s=ProductCount'\n];\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 360,
+        "y": 120,
+        "wires": [
+            ["opcua-client"]
+        ]
+    },
+    {
+        "id": "opcua-client",
+        "type": "OpcUa-Client",
+        "z": "ming-flow-tab-opcua",
+        "endpoint": "opc.tcp://opcua-simulator:4840",
+        "action": "read",
+        "deadbandtype": "a",
+        "deadbandvalue": 1,
+        "time": 10,
+        "timeUnit": "s",
+        "certificate": "n",
+        "localfile": "",
+        "localkeyfile": "",
+        "securitymode": "None",
+        "securitypolicy": "None",
+        "folderName4PKI": "",
+        "name": "Read OPC-UA",
+        "x": 560,
+        "y": 120,
+        "wires": [
+            ["opcua-transform"]
+        ]
+    },
+    {
+        "id": "opcua-transform",
+        "type": "function",
+        "z": "ming-flow-tab-opcua",
+        "name": "Transform OPC-UA Data",
+        "func": "// OPC-UA 응답을 MQTT 형식으로 변환\nconst values = msg.payload;\n\nconst data = {\n    temperature: values[0] || 0,\n    humidity: values[1] || 0,\n    pressure: values[2] || 0,\n    motor_speed: values[3] || 0,\n    product_count: values[4] || 0\n};\n\nmsg.topic = 'factory/line2/opcua_device/data';\nmsg.payload = data;\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 770,
+        "y": 120,
+        "wires": [
+            ["mqtt-publish-opcua", "debug-opcua"]
+        ]
+    },
+    {
+        "id": "mqtt-publish-opcua",
+        "type": "mqtt out",
+        "z": "ming-flow-tab-opcua",
+        "name": "Publish to MQTT",
+        "topic": "",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "application/json",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqtt-broker-config",
+        "x": 1010,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "debug-opcua",
+        "type": "debug",
+        "z": "ming-flow-tab-opcua",
+        "name": "Debug OPC-UA",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1000,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "ming-flow-tab-s7",
+        "type": "tab",
+        "label": "Siemens S7",
+        "disabled": false,
+        "info": "Siemens S7 PLC 통신 예제"
+    },
+    {
+        "id": "comment-s7",
+        "type": "comment",
+        "z": "ming-flow-tab-s7",
+        "name": "=== Siemens S7 PLC 데이터 수집 ===",
+        "info": "",
+        "x": 200,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "s7-endpoint-config",
+        "type": "s7 endpoint",
+        "transport": "iso-on-tcp",
+        "address": "s7-simulator",
+        "port": "102",
+        "rack": "0",
+        "slot": "1",
+        "localtsaphi": "01",
+        "localtsaplo": "00",
+        "remotetsaphi": "01",
+        "remotetsaplo": "00",
+        "connmode": "rack-slot",
+        "adapter": "",
+        "busaddr": "2",
+        "cycletime": "500",
+        "timeout": "2000",
+        "name": "S7 Simulator",
+        "vartable": [
+            {
+                "addr": "DB1,REAL0",
+                "name": "Temperature"
+            },
+            {
+                "addr": "DB1,REAL4",
+                "name": "Humidity"
+            },
+            {
+                "addr": "DB1,REAL8",
+                "name": "Pressure"
+            },
+            {
+                "addr": "DB1,INT12",
+                "name": "MotorSpeed"
+            },
+            {
+                "addr": "DB1,DINT14",
+                "name": "ProductCount"
+            },
+            {
+                "addr": "DB1,X18.0",
+                "name": "MotorRunning"
+            },
+            {
+                "addr": "DB1,X18.1",
+                "name": "AlarmActive"
+            }
+        ]
+    },
+    {
+        "id": "inject-s7-read",
+        "type": "inject",
+        "z": "ming-flow-tab-s7",
+        "name": "Every 5 seconds",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "5",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "5",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 150,
+        "y": 120,
+        "wires": [
+            ["s7-read"]
+        ]
+    },
+    {
+        "id": "s7-read",
+        "type": "s7 in",
+        "z": "ming-flow-tab-s7",
+        "endpoint": "s7-endpoint-config",
+        "mode": "all",
+        "variable": "",
+        "diff": true,
+        "name": "Read S7 Variables",
+        "x": 370,
+        "y": 120,
+        "wires": [
+            ["s7-transform"]
+        ]
+    },
+    {
+        "id": "s7-transform",
+        "type": "function",
+        "z": "ming-flow-tab-s7",
+        "name": "Transform S7 Data",
+        "func": "// S7 데이터를 MQTT 형식으로 변환\nconst data = {\n    temperature: msg.payload.Temperature || 0,\n    humidity: msg.payload.Humidity || 0,\n    pressure: msg.payload.Pressure || 0,\n    motor_speed: msg.payload.MotorSpeed || 0,\n    product_count: msg.payload.ProductCount || 0,\n    motor_running: msg.payload.MotorRunning || false,\n    alarm_active: msg.payload.AlarmActive || false\n};\n\nmsg.topic = 'factory/line3/s7_plc/data';\nmsg.payload = data;\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 570,
+        "y": 120,
+        "wires": [
+            ["mqtt-publish-s7", "debug-s7"]
+        ]
+    },
+    {
+        "id": "mqtt-publish-s7",
+        "type": "mqtt out",
+        "z": "ming-flow-tab-s7",
+        "name": "Publish to MQTT",
+        "topic": "",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "application/json",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqtt-broker-config",
+        "x": 790,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "debug-s7",
+        "type": "debug",
+        "z": "ming-flow-tab-s7",
+        "name": "Debug S7",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 780,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "comment-s7-write",
+        "type": "comment",
+        "z": "ming-flow-tab-s7",
+        "name": "--- S7 PLC 제어 (쓰기) ---",
+        "info": "",
+        "x": 160,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "mqtt-s7-control-sub",
+        "type": "mqtt in",
+        "z": "ming-flow-tab-s7",
+        "name": "S7 Control Subscribe",
+        "topic": "factory/line3/s7_plc/control",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "mqtt-broker-config",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 160,
+        "y": 320,
+        "wires": [
+            ["s7-write-prep"]
+        ]
+    },
+    {
+        "id": "s7-write-prep",
+        "type": "function",
+        "z": "ming-flow-tab-s7",
+        "name": "Prepare S7 Write",
+        "func": "// 제어 명령을 S7 형식으로 변환\n// 예시: {\"variable\": \"MotorSpeed\", \"value\": 1500}\n\nconst command = msg.payload;\nmsg.payload = {};\nmsg.payload[command.variable] = command.value;\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 390,
+        "y": 320,
+        "wires": [
+            ["s7-write"]
+        ]
+    },
+    {
+        "id": "s7-write",
+        "type": "s7 out",
+        "z": "ming-flow-tab-s7",
+        "endpoint": "s7-endpoint-config",
+        "variable": "",
+        "name": "Write S7 Variable",
+        "x": 590,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "ming-flow-tab-simulator",
+        "type": "tab",
+        "label": "Data Simulator",
+        "disabled": false,
+        "info": "테스트용 데이터 시뮬레이터"
+    },
+    {
+        "id": "comment-simulator",
+        "type": "comment",
+        "z": "ming-flow-tab-simulator",
+        "name": "=== 테스트 데이터 시뮬레이터 ===",
+        "info": "",
+        "x": 190,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "inject-simulator",
+        "type": "inject",
+        "z": "ming-flow-tab-simulator",
+        "name": "Every 3 seconds",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "3",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "2",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 150,
+        "y": 120,
+        "wires": [
+            ["generate-test-data"]
+        ]
+    },
+    {
+        "id": "generate-test-data",
+        "type": "function",
+        "z": "ming-flow-tab-simulator",
+        "name": "Generate Test Data",
+        "func": "// 테스트 센서 데이터 생성\nconst baseTemp = 25;\nconst baseHumidity = 60;\nconst basePressure = 1.0;\n\n// 약간의 변동 추가\nconst data = {\n    temperature: baseTemp + (Math.random() * 10 - 5),\n    humidity: baseHumidity + (Math.random() * 20 - 10),\n    pressure: basePressure + (Math.random() * 0.2 - 0.1),\n    motor_speed: Math.floor(1500 + Math.random() * 200),\n    vibration: Math.random() * 2,\n    power_consumption: 45 + Math.random() * 10\n};\n\n// 소수점 2자리로 반올림\nfor (let key in data) {\n    if (typeof data[key] === 'number') {\n        data[key] = Math.round(data[key] * 100) / 100;\n    }\n}\n\nmsg.topic = 'factory/line1/simulator/data';\nmsg.payload = data;\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 380,
+        "y": 120,
+        "wires": [
+            ["mqtt-publish-simulator"]
+        ]
+    },
+    {
+        "id": "mqtt-publish-simulator",
+        "type": "mqtt out",
+        "z": "ming-flow-tab-simulator",
+        "name": "Publish Test Data",
+        "topic": "",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "application/json",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqtt-broker-config",
+        "x": 610,
+        "y": 120,
+        "wires": []
+    }
+]

@@ -1,0 +1,19 @@
+# Grafana Data Source Provisioning
+# InfluxDB 2.x 연결 설정
+
+apiVersion: 1
+
+datasources:
+  - name: InfluxDB
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    jsonData:
+      version: Flux
+      organization: ming-org
+      defaultBucket: factory
+      tlsSkipVerify: true
+    secureJsonData:
+      token: ming-super-secret-token
+    isDefault: true
+    editable: true
