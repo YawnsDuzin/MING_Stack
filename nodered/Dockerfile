@@ -3,7 +3,7 @@
 # 라즈베리파이 4/5 ARM64 최적화
 # =============================================================================
 
-FROM nodered/node-red:3.1-18-minimal
+FROM nodered/node-red:latest-minimal
 
 # 작업 디렉토리 설정
 USER root

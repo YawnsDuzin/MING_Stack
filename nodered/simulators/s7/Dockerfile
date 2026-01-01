@@ -6,9 +6,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # 필수 패키지 설치
-RUN pip install --no-cache-dir \
-    snap7==1.3 \
-    python-snap7==1.3
+RUN pip install --no-cache-dir python-snap7
 
 # 시뮬레이터 스크립트 복사
 COPY s7_simulator.py .

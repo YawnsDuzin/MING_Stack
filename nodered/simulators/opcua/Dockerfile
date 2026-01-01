@@ -5,6 +5,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# 빌드 도구 설치 (cffi 컴파일에 필요)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libc-dev \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # 필수 패키지 설치
 RUN pip install --no-cache-dir \
     asyncua==1.0.4 \
