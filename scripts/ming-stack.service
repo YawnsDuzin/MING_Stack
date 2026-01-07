@@ -1,0 +1,68 @@
+# =============================================================================
+# MING Stack systemd 서비스 파일
+# 라즈베리파이 4/5 산업용 IoT 플랫폼
+# =============================================================================
+#
+# 설치 방법:
+#   1. 이 파일을 /etc/systemd/system/으로 복사
+#      sudo cp scripts/ming-stack.service /etc/systemd/system/
+#
+#   2. 서비스 활성화
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable ming-stack
+#
+#   3. 서비스 시작
+#      sudo systemctl start ming-stack
+#
+#   4. 상태 확인
+#      sudo systemctl status ming-stack
+#
+# 주의: WorkingDirectory와 User를 환경에 맞게 수정하세요.
+# =============================================================================
+
+[Unit]
+Description=MING Stack Industrial IoT Platform
+Documentation=https://github.com/your-repo/MING_Stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# 작업 디렉토리 (환경에 맞게 수정)
+WorkingDirectory=/home/pi/MING_Stack
+
+# 실행 사용자 (환경에 맞게 수정)
+User=pi
+Group=docker
+
+# 환경 파일
+EnvironmentFile=-/home/pi/MING_Stack/.env
+
+# 시작 명령
+ExecStartPre=/usr/bin/docker compose pull --quiet
+ExecStart=/usr/bin/docker compose up -d
+
+# 중지 명령
+ExecStop=/usr/bin/docker compose down
+
+# 재시작 명령 (reload 시)
+ExecReload=/usr/bin/docker compose restart
+
+# 타임아웃 설정
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+# 리소스 제한
+# MemoryMax=2G
+# CPUQuota=80%
+
+# 로깅
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ming-stack
+
+[Install]
+WantedBy=multi-user.target

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Siemens S7 PLC Simulator for MING Stack
-S7 통신 프로토콜 시뮬레이션 (Snap7 라이브러리 기반)
+S7 통신 프로토콜 시뮬레이션 (순수 Python - ARM64 호환)
 
 데이터 블록 구조 (DB1):
 Offset  Type    Name            Description
@@ -24,9 +24,8 @@ M0.1    Motor Stop Command
 M0.2    Alarm Reset
 M0.3    Emergency Stop
 
-Note: 실제 S7 서버 구현은 복잡하므로,
-      이 시뮬레이터는 TCP 기반 간단한 프로토콜로 구현
-      실제 환경에서는 snap7 서버 또는 실제 PLC 사용 권장
+Note: 이 시뮬레이터는 snap7 없이 순수 Python으로 구현되어
+      ARM64 (라즈베리파이) 환경에서도 정상 동작합니다.
 """
 
 import asyncio
@@ -35,8 +34,9 @@ import random
 import math
 import time
 import logging
+import os
 from dataclasses import dataclass, field
-from typing import Dict, Any
+from typing import Dict, Optional
 
 # 로깅 설정
 logging.basicConfig(
@@ -71,6 +71,7 @@ class S7DataSimulator:
         self.start_time = time.time()
         self.motor_running = False
         self.production_count = 0
+        self.alarm_active = False
 
     def update(self):
         """데이터 업데이트"""
@@ -80,14 +81,20 @@ class S7DataSimulator:
         markers = self.memory.markers
         if markers[0] & 0x01:  # M0.0 - Motor Start
             self.motor_running = True
+            markers[0] &= ~0x01  # 명령 클리어
         if markers[0] & 0x02:  # M0.1 - Motor Stop
             self.motor_running = False
+            markers[0] &= ~0x02
+        if markers[0] & 0x04:  # M0.2 - Alarm Reset
+            self.alarm_active = False
+            markers[0] &= ~0x04
         if markers[0] & 0x08:  # M0.3 - Emergency Stop
             self.motor_running = False
+            markers[0] &= ~0x08
 
-        # 온도 시뮬레이션
+        # 온도 시뮬레이션 (일교차 패턴 + 노이즈)
         elapsed = time.time() - self.start_time
-        temp = 25.0 + 5 * math.sin(elapsed / 3600 * 2 * math.pi)
+        temp = 25.0 + 5 * math.sin(elapsed / 1800 * 2 * math.pi)  # 30분 주기
         temp += random.gauss(0, 0.3)
         struct.pack_into('>f', db1, 0, temp)
 
@@ -112,13 +119,17 @@ class S7DataSimulator:
             self.production_count += 1
         struct.pack_into('>i', db1, 14, self.production_count)
 
+        # 알람 체크
+        if temp > 35 or humidity > 80:
+            self.alarm_active = True
+
         # 상태 비트
         status = 0
         if self.motor_running:
             status |= 0x01  # Bit 0: Motor Running
-        if temp > 35 or humidity > 80:
+        if self.alarm_active:
             status |= 0x02  # Bit 1: Alarm Active
-        else:
+        if not self.alarm_active:
             status |= 0x04  # Bit 2: Safety OK
         status |= 0x08  # Bit 3: Auto Mode
         db1[18] = status
@@ -135,18 +146,11 @@ class S7DataSimulator:
 class S7Protocol:
     """S7 통신 프로토콜 처리"""
 
-    # S7 통신 상수
-    COTP_CONNECT = 0xE0
-    COTP_DATA = 0xF0
-    S7_JOB = 0x01
-    S7_ACK_DATA = 0x03
-
     def __init__(self, memory: PLCMemory):
         self.memory = memory
 
     def handle_cotp_connect(self, data: bytes) -> bytes:
         """COTP 연결 응답"""
-        # COTP Connect Confirm
         response = bytearray([
             0x03, 0x00, 0x00, 0x16,  # TPKT Header
             0x11,                     # COTP Length
@@ -154,7 +158,6 @@ class S7Protocol:
             0x00, 0x01,              # DST-REF
             0x00, 0x01,              # SRC-REF
             0x00,                     # Class Option
-            # Parameters
             0xC0, 0x01, 0x0A,        # TPDU Size
             0xC1, 0x02, 0x01, 0x00,  # SRC-TSAP
             0xC2, 0x02, 0x01, 0x02   # DST-TSAP
@@ -166,7 +169,6 @@ class S7Protocol:
         response = bytearray([
             0x03, 0x00, 0x00, 0x1B,  # TPKT Header
             0x02, 0xF0, 0x80,        # COTP DT Data
-            # S7 Header
             0x32,                     # Protocol ID
             0x03,                     # Message Type (Ack_Data)
             0x00, 0x00,              # Reserved
@@ -175,7 +177,6 @@ class S7Protocol:
             0x00, 0x00,              # Data Length
             0x00,                     # Error Class
             0x00,                     # Error Code
-            # Parameters
             0xF0,                     # Function
             0x00                      # Reserved
         ])
@@ -183,13 +184,11 @@ class S7Protocol:
 
     def handle_read_request(self, data: bytes) -> bytes:
         """읽기 요청 처리"""
-        # 간단한 응답 생성 (DB1의 모든 데이터)
         db1_data = self.memory.db.get(1, bytearray(20))
 
         response = bytearray([
             0x03, 0x00, 0x00, 0x00,  # TPKT Header (length will be set)
             0x02, 0xF0, 0x80,        # COTP DT Data
-            # S7 Header
             0x32,                     # Protocol ID
             0x03,                     # Message Type (Ack_Data)
             0x00, 0x00,              # Reserved
@@ -198,10 +197,8 @@ class S7Protocol:
             0x00, len(db1_data) + 4, # Data Length
             0x00,                     # Error Class
             0x00,                     # Error Code
-            # Parameters
             0x04,                     # Read Var
             0x01,                     # Item Count
-            # Data Item
             0xFF,                     # Return Code (Success)
             0x04,                     # Transport Size (Byte)
             0x00, len(db1_data)      # Length
@@ -217,11 +214,9 @@ class S7Protocol:
 
     def handle_write_request(self, data: bytes) -> bytes:
         """쓰기 요청 처리"""
-        # 쓰기 성공 응답
         response = bytearray([
             0x03, 0x00, 0x00, 0x16,  # TPKT Header
             0x02, 0xF0, 0x80,        # COTP DT Data
-            # S7 Header
             0x32,                     # Protocol ID
             0x03,                     # Message Type (Ack_Data)
             0x00, 0x00,              # Reserved
@@ -230,10 +225,8 @@ class S7Protocol:
             0x00, 0x01,              # Data Length
             0x00,                     # Error Class
             0x00,                     # Error Code
-            # Parameters
             0x05,                     # Write Var
             0x01,                     # Item Count
-            # Data Item
             0xFF                      # Return Code (Success)
         ])
         return bytes(response)
@@ -242,9 +235,10 @@ class S7Protocol:
 class S7Server:
     """S7 TCP 서버"""
 
-    def __init__(self, host: str = '0.0.0.0', port: int = 102):
+    def __init__(self, host: str = '0.0.0.0', port: int = None):
         self.host = host
-        self.port = port
+        # 환경변수에서 포트 읽기 (기본값: 1102 - non-privileged)
+        self.port = port or int(os.environ.get('S7_PORT', '1102'))
         self.memory = PLCMemory()
         self.simulator = S7DataSimulator(self.memory)
         self.protocol = S7Protocol(self.memory)
@@ -258,7 +252,7 @@ class S7Server:
         try:
             while True:
                 # TPKT Header 읽기 (4 bytes)
-                header = await reader.read(4)
+                header = await asyncio.wait_for(reader.read(4), timeout=60.0)
                 if not header or len(header) < 4:
                     break
 
@@ -268,7 +262,7 @@ class S7Server:
                     continue
 
                 # 나머지 데이터 읽기
-                data = await reader.read(length - 4)
+                data = await asyncio.wait_for(reader.read(length - 4), timeout=10.0)
                 if not data:
                     break
 
@@ -279,6 +273,8 @@ class S7Server:
                     writer.write(response)
                     await writer.drain()
 
+        except asyncio.TimeoutError:
+            logger.debug(f"Client timeout: {addr}")
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -286,14 +282,16 @@ class S7Server:
         finally:
             logger.info(f"Client disconnected: {addr}")
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
 
-    def process_packet(self, packet: bytes) -> bytes:
+    def process_packet(self, packet: bytes) -> Optional[bytes]:
         """패킷 처리"""
         if len(packet) < 7:
             return None
 
-        # COTP Type 확인
         cotp_len = packet[4]
         cotp_type = packet[5]
 
@@ -302,7 +300,6 @@ class S7Server:
             return self.protocol.handle_cotp_connect(packet)
 
         elif cotp_type == 0xF0:  # COTP Data
-            # S7 메시지 확인
             if len(packet) > 7 + cotp_len:
                 s7_start = 4 + cotp_len + 1
                 if packet[s7_start] == 0x32:  # S7 Protocol ID
@@ -334,20 +331,23 @@ class S7Server:
             self.handle_client, self.host, self.port
         )
 
-        logger.info("=" * 50)
-        logger.info("MING Stack - S7 PLC Simulator")
-        logger.info("=" * 50)
-        logger.info(f"Listening on {self.host}:{self.port}")
+        logger.info("=" * 60)
+        logger.info("  MING Stack - S7 PLC Simulator (ARM64 Compatible)")
+        logger.info("=" * 60)
+        logger.info(f"  Listening on {self.host}:{self.port}")
         logger.info("")
-        logger.info("DB1 Structure:")
-        logger.info("  Offset 0:  Temperature (REAL)")
-        logger.info("  Offset 4:  Humidity (REAL)")
-        logger.info("  Offset 8:  Pressure (REAL)")
-        logger.info("  Offset 12: MotorSpeed (INT)")
-        logger.info("  Offset 14: ProductCount (DINT)")
-        logger.info("  Offset 18: StatusBits (BYTE)")
-        logger.info("  Offset 19: ErrorCode (BYTE)")
-        logger.info("=" * 50)
+        logger.info("  DB1 Structure:")
+        logger.info("    Offset 0:  Temperature (REAL) - °C")
+        logger.info("    Offset 4:  Humidity (REAL) - %")
+        logger.info("    Offset 8:  Pressure (REAL) - bar")
+        logger.info("    Offset 12: MotorSpeed (INT) - RPM")
+        logger.info("    Offset 14: ProductCount (DINT)")
+        logger.info("    Offset 18: StatusBits (BYTE)")
+        logger.info("    Offset 19: ErrorCode (BYTE)")
+        logger.info("")
+        logger.info("  Note: This simulator uses pure Python (no snap7)")
+        logger.info("        Compatible with ARM64 (Raspberry Pi)")
+        logger.info("=" * 60)
 
         # 업데이트 루프 시작
         asyncio.create_task(self.update_loop())

@@ -1,40 +1,49 @@
 # version 속성은 Docker Compose V2에서 더 이상 필요하지 않음
 
+# =============================================================================
 # MING Stack - 라즈베리파이 4/5 최적화 구성
 # Mosquitto + InfluxDB + Node-RED + Grafana
+# =============================================================================
 
 services:
-  # =============================================================================
+  # ===========================================================================
   # MQTT Broker - Eclipse Mosquitto
-  # =============================================================================
+  # ===========================================================================
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: ming-mosquitto
     restart: unless-stopped
     ports:
-      - "1883:1883"     # MQTT
-      - "9001:9001"     # WebSocket
+      - "${MQTT_PORT:-1883}:1883"      # MQTT
+      - "${MQTT_WS_PORT:-9001}:9001"   # WebSocket
     volumes:
       - ./mosquitto/config:/mosquitto/config:ro
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
     networks:
       - ming-network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
     healthcheck:
-      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/#' -C 1 -i healthcheck -W 3 -u ${MQTT_USER:-mqtt_user} -P ${MQTT_PASSWORD:-mqtt_pass} 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 10s
 
-  # =============================================================================
+  # ===========================================================================
   # Time-Series Database - InfluxDB 2.x
-  # =============================================================================
+  # ===========================================================================
   influxdb:
     image: influxdb:2.7
     container_name: ming-influxdb
     restart: unless-stopped
     ports:
-      - "8086:8086"
+      - "${INFLUXDB_PORT:-8086}:8086"
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUXDB_USERNAME:-admin}
@@ -48,15 +57,22 @@ services:
       - ./influxdb/config:/etc/influxdb2
     networks:
       - ming-network
+    deploy:
+      resources:
+        limits:
+          memory: ${INFLUXDB_MEMORY_LIMIT:-1G}
+        reservations:
+          memory: 256M
     healthcheck:
-      test: ["CMD", "influx", "ping"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8086/health | grep -q '\"status\":\"pass\"' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
-  # =============================================================================
+  # ===========================================================================
   # Flow Programming - Node-RED
-  # =============================================================================
+  # ===========================================================================
   nodered:
     build:
       context: ./nodered
@@ -64,7 +80,7 @@ services:
     container_name: ming-nodered
     restart: unless-stopped
     ports:
-      - "1880:1880"
+      - "${NODERED_PORT:-1880}:1880"
     environment:
       - TZ=${TIMEZONE:-Asia/Seoul}
       - NODE_RED_CREDENTIAL_SECRET=${NODERED_CREDENTIAL_SECRET:-ming-secret-key}
@@ -73,29 +89,40 @@ services:
     networks:
       - ming-network
     depends_on:
-      - mosquitto
-      - influxdb
+      mosquitto:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${NODERED_MEMORY_LIMIT:-512M}
+        reservations:
+          memory: 256M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:1880/"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:1880/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
 
-  # =============================================================================
+  # ===========================================================================
   # Visualization - Grafana
-  # =============================================================================
+  # ===========================================================================
   grafana:
     image: grafana/grafana:latest
     container_name: ming-grafana
     restart: unless-stopped
+    user: "472:472"
     ports:
-      - "3000:3000"
+      - "${GRAFANA_PORT:-3000}:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
       - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
     volumes:
       - ./grafana/data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
@@ -103,16 +130,24 @@ services:
     networks:
       - ming-network
     depends_on:
-      - influxdb
+      influxdb:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${GRAFANA_MEMORY_LIMIT:-256M}
+        reservations:
+          memory: 128M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
-  # =============================================================================
+  # ===========================================================================
   # Industrial Protocol Simulators
-  # =============================================================================
+  # ===========================================================================
 
   # Modbus TCP Simulator
   modbus-simulator:
@@ -122,9 +157,24 @@ services:
     container_name: ming-modbus-simulator
     restart: unless-stopped
     ports:
-      - "5020:5020"     # Modbus TCP
+      - "${MODBUS_PORT:-5020}:5020"
     networks:
       - ming-network
+    profiles:
+      - simulators
+      - all
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',5020)); s.close()\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   # OPC-UA Simulator
   opcua-simulator:
@@ -134,11 +184,26 @@ services:
     container_name: ming-opcua-simulator
     restart: unless-stopped
     ports:
-      - "4840:4840"     # OPC-UA
+      - "${OPCUA_PORT:-4840}:4840"
     networks:
       - ming-network
+    profiles:
+      - simulators
+      - all
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',4840)); s.close()\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
-  # S7 PLC Simulator (Siemens)
+  # S7 PLC Simulator (Siemens) - ARM64 Compatible
   s7-simulator:
     build:
       context: ./nodered/simulators/s7
@@ -146,10 +211,61 @@ services:
     container_name: ming-s7-simulator
     restart: unless-stopped
     ports:
-      - "102:102"       # S7 Protocol
+      - "${S7_PORT:-1102}:1102"
+    environment:
+      - S7_PORT=1102
     networks:
       - ming-network
+    profiles:
+      - simulators
+      - all
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',1102)); s.close()\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
+  # ===========================================================================
+  # Container Management - Portainer
+  # ===========================================================================
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: ming-portainer
+    restart: unless-stopped
+    ports:
+      - "${PORTAINER_PORT:-9000}:9000"
+      - "9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - portainer-data:/data
+    networks:
+      - ming-network
+    profiles:
+      - management
+      - all
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# =============================================================================
+# Networks
+# =============================================================================
 networks:
   ming-network:
     driver: bridge
@@ -157,8 +273,17 @@ networks:
       config:
         - subnet: 172.20.0.0/16
 
+# =============================================================================
+# Named Volumes (optional - for better data management)
+# =============================================================================
 volumes:
   influxdb-data:
+    driver: local
   grafana-data:
+    driver: local
   nodered-data:
+    driver: local
   mosquitto-data:
+    driver: local
+  portainer-data:
+    driver: local
