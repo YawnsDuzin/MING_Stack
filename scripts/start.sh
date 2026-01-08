@@ -75,10 +75,10 @@ echo -e "${GREEN}✓ Environment configuration ready${NC}"
 echo -e "${YELLOW}[3/6] Setting up directories and permissions...${NC}"
 
 # 데이터 디렉토리 생성
-mkdir -p mosquitto/data mosquitto/log
+mkdir -p mosquitto/data mosquitto/log mosquitto/config
 mkdir -p influxdb/data influxdb/config
 mkdir -p nodered/data
-mkdir -p grafana/data
+mkdir -p grafana/data grafana/provisioning grafana/dashboards
 
 # 권한 설정 (컨테이너 내부 사용자 UID에 맞춤)
 # Mosquitto: 1883:1883
@@ -87,17 +87,33 @@ mkdir -p grafana/data
 
 # 권한 설정 시도 (실패해도 계속 진행)
 if [ "$(id -u)" = "0" ] || sudo -n true 2>/dev/null; then
+    echo "Setting directory permissions with sudo..."
+
+    # Mosquitto: 데이터 및 로그 디렉토리
     sudo chown -R 1883:1883 mosquitto/data mosquitto/log 2>/dev/null || true
-    sudo chown -R 1000:1000 nodered/data 2>/dev/null || true
-    sudo chown -R 472:472 grafana/data 2>/dev/null || true
+
+    # Mosquitto: config/passwd 파일 (보안상 600 권한 필요)
+    if [ -f mosquitto/config/passwd ]; then
+        sudo chown 1883:1883 mosquitto/config/passwd 2>/dev/null || true
+        sudo chmod 600 mosquitto/config/passwd 2>/dev/null || true
+    fi
+
+    # Node-RED: 전체 디렉토리
+    sudo chown -R 1000:1000 nodered 2>/dev/null || true
+    sudo chmod -R 775 nodered 2>/dev/null || true
+
+    # Grafana: 전체 디렉토리
+    sudo chown -R 472:472 grafana 2>/dev/null || true
 else
+    echo "Setting directory permissions without sudo..."
     # sudo 없이 chmod로 대체
     chmod -R 777 mosquitto/data mosquitto/log 2>/dev/null || true
-    chmod -R 777 nodered/data 2>/dev/null || true
-    chmod -R 777 grafana/data 2>/dev/null || true
+    chmod 600 mosquitto/config/passwd 2>/dev/null || true
+    chmod -R 777 nodered 2>/dev/null || true
+    chmod -R 777 grafana 2>/dev/null || true
 fi
 
-echo -e "${GREEN}✓ Directories created${NC}"
+echo -e "${GREEN}✓ Directories and permissions configured${NC}"
 
 # -----------------------------------------------------------------------------
 # 4. Mosquitto 비밀번호 초기화
@@ -126,6 +142,14 @@ if [ ! -f "$PASSWD_FILE" ] || ! grep -v "^#" "$PASSWD_FILE" | grep -q "[^[:space
     docker run --rm -v "$(pwd)/mosquitto/config:/mosquitto/config" \
         eclipse-mosquitto:2.0 \
         mosquitto_passwd -b /mosquitto/config/passwd sensor_device "$MQTT_PASS"
+
+    # 생성 후 passwd 파일 권한 재설정 (docker run이 root로 생성)
+    if [ "$(id -u)" = "0" ] || sudo -n true 2>/dev/null; then
+        sudo chown 1883:1883 "$PASSWD_FILE" 2>/dev/null || true
+        sudo chmod 600 "$PASSWD_FILE" 2>/dev/null || true
+    else
+        chmod 600 "$PASSWD_FILE" 2>/dev/null || true
+    fi
 
     echo -e "${GREEN}✓ Mosquitto passwords initialized${NC}"
     echo -e "${YELLOW}  Users: $MQTT_USER, nodered, sensor_device${NC}"
