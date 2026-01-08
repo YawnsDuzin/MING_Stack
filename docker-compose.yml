@@ -232,6 +232,36 @@ services:
       retries: 3
       start_period: 10s
 
+  # MELSEC MC Protocol Simulator (Mitsubishi) - ARM64 Compatible
+  melsec-simulator:
+    build:
+      context: ./nodered/simulators/melsec
+      dockerfile: Dockerfile
+    container_name: ming-melsec-simulator
+    restart: unless-stopped
+    ports:
+      - "${MELSEC_PORT:-5000}:5000"
+    environment:
+      - MC_PORT=5000
+      - MC_HOST=0.0.0.0
+    networks:
+      - ming-network
+    profiles:
+      - simulators
+      - all
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',5000)); s.close()\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
   # ===========================================================================
   # Container Management - Portainer
   # ===========================================================================

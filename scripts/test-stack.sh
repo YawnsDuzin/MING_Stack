@@ -326,6 +326,7 @@ check_simulators() {
     MODBUS_PORT=${MODBUS_PORT:-5020}
     OPCUA_PORT=${OPCUA_PORT:-4840}
     S7_PORT=${S7_PORT:-1102}
+    MELSEC_PORT=${MELSEC_PORT:-5000}
 
     # Modbus 시뮬레이터
     if docker ps --format '{{.Names}}' | grep -q "ming-modbus-simulator"; then
@@ -358,6 +359,17 @@ check_simulators() {
         fi
     else
         test_info "S7 시뮬레이터 실행 중 아님 (--profile simulators 필요)"
+    fi
+
+    # MELSEC MC 시뮬레이터
+    if docker ps --format '{{.Names}}' | grep -q "ming-melsec-simulator"; then
+        if nc -z localhost $MELSEC_PORT 2>/dev/null; then
+            test_pass "MELSEC 시뮬레이터 포트 $MELSEC_PORT 열림"
+        else
+            test_warn "MELSEC 시뮬레이터 포트 $MELSEC_PORT 닫힘"
+        fi
+    else
+        test_info "MELSEC 시뮬레이터 실행 중 아님 (--profile simulators 필요)"
     fi
 }
 
